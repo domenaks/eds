@@ -74,19 +74,27 @@ ZINĀŠANAS PAR EDS (balsties uz šo informāciju):
 - Palīgmateriāli un video: https://www.vid.gov.lv/lv/paligmateriali
 - Biežāk uzdotie jautājumi: https://www.vid.gov.lv/lv/biezak-uzdotie-jautajumi-katalogs
 - VID tālrunis: 67120000 (darba dienās 8:30–17:00)
-- E-pasts: helpdesk@vid.gov.lv`;
+- E-pasts: helpdesk@vid.gov.lv
+
+## 5. VIZUĀLIE MATERIĀLI (EKRĀNUZŅĒMUMI)
+Kad tu skaidro konkrētās tēmas no saraksta zemāk, Tev OBLIGĀTI savas atbildes tekstā (vislabāk pie attiecīgā soļa vai atbildes beigās) jāievieto atbilstošais attēls, precīzi izmantojot Markdown formātu. Nekad neizdomā citus failu nosaukumus un neraksti neko citu izņemot zemāk norādīto kodu:
+
+PIEEJAMĀS BILDES UN TO IZMANTOŠANA:
+- ![Dokumentu iesniegšana](assets/DOKUMENTI.png) — OBLIGĀTI parādi šo bildi, kad jautā saistībā ar dokumentu iesniegšanu.
+- ![Gada ienākumu deklarācija un pārmaksa](assets/parmaksa.png) — OBLIGĀTI parādi šo bildi, kad jautā par gada nodokļu deklarācijas iesniegšanu vai nodokļu pārmaksas jautājumiem.
+- ![Maksājumi](assets/maksajumi.png) — OBLIGĀTI parādi šo bildi, kad jautā par nodokļu samaksu, maksājumiem vai VID rēķiniem.
+- Kad skaidro par algas nodokļu grāmatiņu, OBLIGĀTI parādi šīs divas bildes vienu zem otras:
+![Algas nodokļu grāmatiņa 1](assets/gramatina.png)
+![Algas nodokļu grāmatiņa 2](assets/gramatina1.png)`;
 
 
 // ---- KONFIGURĀCIJA ----
 const GEMINI_API_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
-// ---- KONFIGURĀCIJA ----
-const API_KEY = 'AIzaSyAFrlC_eqe7D-GD9Lx5WFzU9OkGu8x3GMw';
-
 // ---- STĀVOKLIS ----
 let conversationHistory = [];
 let isLoading = false;
-let apiKey = API_KEY;
+let apiKey = null; // No hardcoded key anymore to prevent GitHub exposure
 
 // ---- DOM ELEMENTI ----
 const chatLog = document.getElementById('chatLog');
@@ -127,8 +135,8 @@ document.addEventListener('DOMContentLoaded', () => {
       }, 2000);
     } else {
       localStorage.removeItem('gemini_api_key');
-      apiKey = API_KEY;
-      alert('Izmantota iebūvētā API atslēga.');
+      apiKey = null;
+      alert('Izmantots drošais iebūvētais Vercel serveris.');
     }
   });
 
@@ -210,13 +218,42 @@ async function handleSend() {
   }
 }
 
-// ---- AI API IZSAUKUMS (Gemini vai OpenAI) ----
+// ---- AI API IZSAUKUMS (Gemini vai OpenAI vai Vercel Backend) ----
 async function callAI(userMessage) {
-  if (apiKey.startsWith('sk-')) {
-    return await callOpenAI();
+  if (!apiKey) {
+    return await callVercelBackend(); // Drošais backend bez atslēgas atklāšanas
+  } else if (apiKey.startsWith('sk-')) {
+    return await callOpenAI(); // Lietotāja paša OpenAI atslēga
   } else {
-    return await callGemini();
+    return await callGemini(); // Lietotāja paša Gemini atslēga
   }
+}
+
+async function callVercelBackend() {
+  const requestBody = {
+    system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+    contents: conversationHistory,
+    generationConfig: { temperature: 0.7, topK: 40, topP: 0.95, maxOutputTokens: 2048 }
+  };
+
+  const response = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestBody)
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    if (response.status === 400) throw new Error('bad_request');
+    if (response.status === 429) throw new Error('rate_limit');
+    if (response.status === 500) throw new Error(`server_config_error: ${errorData.error || ''}`);
+    throw new Error(`api_error_${response.status}`);
+  }
+
+  const data = await response.json();
+  if (!data.candidates || data.candidates.length === 0) throw new Error('no_response');
+  if (data.candidates[0].finishReason === 'SAFETY') throw new Error('safety_block');
+  return data.candidates[0].content.parts[0].text;
 }
 
 async function callOpenAI() {
@@ -314,12 +351,14 @@ function formatErrorMessage(err) {
     return '❌ **API atslēga nav derīga.** Lūdzu, pārbaudi savu API atslēgu un ievadi to **Iestatījumos (⚙️ ikona)**.';
   }
   if (msg.includes('rate_limit')) {
-    const isCustomKey = apiKey !== API_KEY;
-    if (isCustomKey) {
+    if (apiKey) {
       return '⏳ **Pārāk daudz pieprasījumu.**\n\nTava personīgā atslēga ir sasniegusi kvotas limitu. Lūdzu, uzgaidi nedaudz vai pārbaudi tās statusu.';
     } else {
-      return '⏳ **Pārāk daudz pieprasījumu.**\n\nIebūvētā bezmaksas atslēga šobrīd ir pārslogota. Lūdzu:\n1. Uzgaidi dažas sekundes un mēģini vēlreiz.\n2. Vai ieliec savu personīgo atslēgu (Gemini / OpenAI) **Iestatījumos (⚙️ ikona augšā)**.';
+      return '⏳ **Pārāk daudz pieprasījumu.**\n\nIebūvētais serveris šobrīd ir pārslogots. Lūdzu pamēģini vēlreiz pēc mirkļa.';
     }
+  }
+  if (msg.includes('server_config_error')) {
+    return '🔧 **Sistēmas kļūda!** Autoram jāiestata Vercel vidē `GEMINI_API_KEY`, jo atslēga ir paslēpta drošības nolūkos!';
   }
   if (msg.includes('not_found')) {
     console.error("Not found details:", msg);
